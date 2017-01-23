@@ -57,8 +57,8 @@ fi
 
 echo "--> Compressing..."
 
-# apt-get update -qq >/dev/null 2>&1
-# apt-get install -yqq --force-yes unzip zip >/dev/null 2>&1
+apt-get update -qq >/dev/null 2>&1
+apt-get install -yqq --force-yes unzip zip >/dev/null 2>&1
 
 mkdir pkg/dist
 for PLATFORM in $(find ./pkg -mindepth 1 -maxdepth 1 -type d); do
@@ -68,8 +68,8 @@ for PLATFORM in $(find ./pkg -mindepth 1 -maxdepth 1 -type d); do
   fi
 
   cd $PLATFORM
-  tar -czf ../dist/${NAME}_${VERSION}_${OSARCH}.tar.gz ${NAME}
-  # zip ../dist/${NAME}_${VERSION}_${OSARCH}.zip ${NAME}
+  tar -czf ../dist/${NAME}_${VERSION}_${OSARCH}.tgz ${NAME}
+  zip ../dist/${NAME}_${VERSION}_${OSARCH}.zip ${NAME}
   cd - >/dev/null 2>&1
 done
 
