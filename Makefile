@@ -4,13 +4,14 @@ CURRENT_DIR := $(dir $(realpath $(MKFILE_PATH)))
 CURRENT_DIR := $(CURRENT_DIR:/=)
 
 # Get the project metadata
-GOVERSION := 1.7.3
-VERSION := 0.1.0
-PROJECT := $(shell echo $(CURRENT_DIR) | rev | cut -d'/' -f1 -f2 -f3 | rev)
+GOVERSION := 1.8
+VERSION := 0.18.0
+PROJECT := github.com/sethvargo/vault-crowdsource
 OWNER := $(dir $(PROJECT))
 OWNER := $(notdir $(OWNER:/=))
 NAME := $(notdir $(PROJECT))
-EXTERNAL_TOOLS =
+EXTERNAL_TOOLS = \
+	github.com/jteeuwen/go-bindata/...
 
 # Current system information (this is the invoking system)
 ME_OS = $(shell go env GOOS)
@@ -25,10 +26,16 @@ XC_EXCLUDE ?=
 GPG_KEY ?=
 
 # List of tests to run
-TEST = ./...
+TEST ?= ./...
 
 # List all our actual files, excluding vendor
 GOFILES = $(shell go list $(TEST) | grep -v /vendor/)
+
+# Tags specific for building
+GOTAGS ?=
+
+# Number of procs to use
+GOMAXPROCS ?= 4
 
 # bin builds the project by invoking the compile script inside of a Docker
 # container. Invokers can override the target OS or architecture using
@@ -36,35 +43,62 @@ GOFILES = $(shell go list $(TEST) | grep -v /vendor/)
 bin:
 	@echo "==> Building ${PROJECT}..."
 	@docker run \
+		--interactive \
+		--tty \
 		--rm \
+		--dns=8.8.8.8 \
 		--env="VERSION=${VERSION}" \
 		--env="PROJECT=${PROJECT}" \
 		--env="OWNER=${OWNER}" \
 		--env="NAME=${NAME}" \
+		--env="GOMAXPROCS=${GOMAXPROCS}" \
+		--env="GOTAGS=${GOTAGS}" \
 		--env="XC_OS=${XC_OS}" \
 		--env="XC_ARCH=${XC_ARCH}" \
 		--env="XC_EXCLUDE=${XC_EXCLUDE}" \
 		--env="DIST=${DIST}" \
 		--workdir="/go/src/${PROJECT}" \
 		--volume="${CURRENT_DIR}:/go/src/${PROJECT}" \
-		"golang:${GOVERSION}" /bin/sh -c "scripts/compile.sh"
+		"golang:${GOVERSION}" /usr/bin/env sh -c "scripts/compile.sh"
+
+# bin-local builds the project using the local go environment. This is only
+# recommended for advanced users or users who do not wish to use the Docker
+# build process.
+bin-local:
+	@echo "==> Building ${PROJECT} (locally)..."
+	@env \
+		VERSION="${VERSION}" \
+		PROJECT="${PROJECT}" \
+		OWNER="${OWNER}" \
+		NAME="${NAME}" \
+		GOMAXPROCS="${GOMAXPROCS}" \
+		GOTAGS="${GOTAGS}" \
+		XC_OS="${XC_OS}" \
+		XC_ARCH="${XC_ARCH}" \
+		XC_EXCLUDE="${XC_EXCLUDE}" \
+		DIST="${DIST}" \
+		/usr/bin/env sh -c "scripts/compile.sh"
 
 # bootstrap installs the necessary go tools for development or build
 bootstrap:
 	@echo "==> Bootstrapping ${PROJECT}..."
 	@for t in ${EXTERNAL_TOOLS}; do \
-		echo "--> Installing "$$t"..." ; \
+		echo "--> Installing $$t" ; \
 		go get -u "$$t"; \
 	done
 
 # deps gets all the dependencies for this repository and vendors them.
 deps:
 	@echo "==> Updating dependencies..."
-	@echo "--> Installing dependency manager..."
-	@go get -u github.com/kardianos/govendor
-	@govendor init
-	@echo "--> Installing all dependencies..."
-	@govendor fetch -v +outside
+	@docker run \
+		--interactive \
+		--tty \
+		--rm \
+		--dns=8.8.8.8 \
+		--env="GOMAXPROCS=${GOMAXPROCS}" \
+		--workdir="/go/src/${PROJECT}" \
+		--volume="${CURRENT_DIR}:/go/src/${PROJECT}" \
+		"golang:${GOVERSION}" /usr/bin/env sh -c "scripts/deps.sh"
 
 # dev builds the project for the current system as defined by go env.
 dev:
@@ -72,14 +106,25 @@ dev:
 		XC_OS="${ME_OS}" \
 		XC_ARCH="${ME_ARCH}" \
 		$(MAKE) -f "${MKFILE_PATH}" bin
-	@echo "--> Moving into PATH"
+	@echo "--> Moving into bin/"
 	@mkdir -p "${CURRENT_DIR}/bin/"
-	@mkdir -p "${GOPATH}/bin/"
 	@cp "${CURRENT_DIR}/pkg/${ME_OS}_${ME_ARCH}/${NAME}" "${CURRENT_DIR}/bin/"
+ifdef GOPATH
+	@echo "--> Moving into GOPATH/"
+	@mkdir -p "${GOPATH}/bin/"
 	@cp "${CURRENT_DIR}/pkg/${ME_OS}_${ME_ARCH}/${NAME}" "${GOPATH}/bin/"
+endif
 
 # dist builds the binaries and then signs and packages them for distribution
 dist:
+ifndef GPG_KEY
+	@echo "==> WARNING: No GPG key specified! Without a GPG key, this release"
+	@echo "             will not be signed. Abort now to prevent building an"
+	@echo "             unsigned release, or wait 5 seconds to continue."
+	@echo ""
+	@echo "--> Press CTRL + C to abort..."
+	@sleep 5
+endif
 	@${MAKE} -f "${MKFILE_PATH}" bin DIST=1
 	@echo "==> Tagging release (v${VERSION})..."
 ifdef GPG_KEY
@@ -113,7 +158,7 @@ docker-push:
 	@docker push "${OWNER}/${NAME}:latest"
 	@docker push "${OWNER}/${NAME}:${VERSION}"
 
-# generate runs the go generator to compile code
+# generate runs the code generator
 generate:
 	@echo "==> Generating ${PROJECT}..."
 	@go generate ${GOFILES}
@@ -121,11 +166,11 @@ generate:
 # test runs the test suite
 test:
 	@echo "==> Testing ${PROJECT}..."
-	@go test -timeout=60s -parallel=10 ${GOFILES} ${TESTARGS}
+	@go test -timeout=60s -parallel=10 -tags="${GOTAGS}" ${GOFILES} ${TESTARGS}
 
 # test-race runs the race checker
 test-race:
 	@echo "==> Testing ${PROJECT} (race)..."
-	@go test -timeout=60s -race ${GOFILES} ${TESTARGS}
+	@go test -timeout=60s -race -tags="${GOTAGS}" ${GOFILES} ${TESTARGS}
 
-.PHONY: bin bootstrap deps dev dist docker docker-push generate test test-race
+.PHONY: bin bin-local bootstrap deps dev dist docker docker-push generate test test-race

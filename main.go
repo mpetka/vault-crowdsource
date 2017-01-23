@@ -2,13 +2,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
+	"time"
 
 	"github.com/hashicorp/vault/api"
 )
@@ -61,31 +62,26 @@ func main() {
 	// Health endpoint
 	mux.HandleFunc("/health", withAppHeaders(httpHealth()))
 
-	server, err := NewServer(*listenFlag, mux)
-	if err != nil {
-		log.Printf("[ERR] Error starting server: %s", err)
-		os.Exit(127)
-	}
-
-	go server.Start()
+	srv := &http.Server{Addr: *listenFlag, Handler: mux}
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Printf("[ERR] Error starting server: %s", err)
+		}
+	}()
 	log.Printf("Server is listening on %s\n", *listenFlag)
 
-	signalCh := make(chan os.Signal, syscall.SIGINT)
-	signal.Notify(signalCh)
+	signalCh := make(chan os.Signal)
+	signal.Notify(signalCh, os.Interrupt)
 
-	for {
-		select {
-		case s := <-signalCh:
-			switch s {
-			case syscall.SIGINT:
-				log.Printf("[INFO] Received interrupt")
-				server.Stop()
-				os.Exit(2)
-			default:
-				log.Printf("[ERR] Unknown signal %v", s)
-			}
-		}
-	}
+	<-signalCh
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	srv.Shutdown(ctx)
+
+	log.Println("Server is stopped!")
 }
 
 func vaultClient() (*api.Client, error) {
